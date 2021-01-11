@@ -10,7 +10,9 @@ isi config.json
 }
 */
 #include <ArduinoJson.h>
-#include <SPIFFS.h>
+#include <StreamUtils.h>
+#include "FS.h"
+#include "SPIFFS.h"
 #include <nitenan_config.h>
 #include <Arduino.h>
 #include <WiFi.h>
@@ -18,40 +20,22 @@ isi config.json
 #include "soc/rtc_cntl_reg.h"
 #include "esp_camera.h"
 
-const char *ssid = "aefocs";
-const char *password = "000354453000";
-
-String serverName = "192.168.2.130";
-
-String serverPath = "/otoma/api/nitenanControllerRequest.php"; // The default serverPath should be upload.php
-
-const int serverPort = 8080;
+DynamicJsonDocument json(2048);
 
 WiFiClient client;
 
-const int timerInterval = 1000;   // time between each HTTP POST image
-unsigned long previousMillis = 0; // last time image was sent
+unsigned long lastHTTPRequest = 0; // last time image was sent
 
 String sendPhoto();
 bool loadConfig();
-// const String
-// buildVer = BUILD_VERSION,
-//  sdkVer = ESP.getSdkVersion(),
-//  chipRev = String(ESP.getChipRevision()),
-//  freeSketch = String(ESP.getFreeSketchSpace()),
-//  sketchSize = String(ESP.getSketchSize()),
-//  chipSize = String(ESP.getFlashChipSize()),
-//  sketchMD5 = ESP.getSketchMD5();
-//  cpuFreq = String(ESP.getCpuFreqMHz());
-//  macAddr = WiFi.macAddress();
+bool writeConfig();
 
 void setup()
 {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-  Serial.begin(115200);
   WiFi.mode(WIFI_STA);
-  Serial.printf(
-      "buildVer : %s\nsdkVer : %s\nchipRev : %lu\nfreeSketch : %lu\nsketchSize : %lu\nflashChipSize : %lu\nsketchMD5 : %s\ncpuFreq : %lu\nmacAddr : %s\n",
+  log_d(
+      "buildVer : %s\nsdkVer : %s\nchipRev : %lu\nfreeSketch : %lu\nsketchSize : %lu\nflashChipSize : %lu\nsketchMD5 : %s\ncpuFreq : %luMHz\nmacAddr : %s\n",
       BUILD_VERSION,
       ESP.getSdkVersion(),
       ESP.getChipRevision(),
@@ -61,35 +45,31 @@ void setup()
       ESP.getSketchMD5().c_str(),
       ESP.getCpuFreqMHz(),
       WiFi.macAddress().c_str());
-  Serial.println("Mounting FS...");
-
+  log_d("Mounting FS...");
+  delay(1000);
   if (!SPIFFS.begin())
   {
-    Serial.println("Failed to mount file system");
+    log_d("Failed to mount file system");
     delay(1000);
     ESP.restart();
   }
-
+  delay(1000);
   if (!loadConfig())
   {
-    Serial.println("Failed to load config");
+    log_d("Failed to load config");
     delay(1000);
     ESP.restart();
   }
   else
-    Serial.println("Config loaded");
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+    log_d("Config loaded");
+
+  log_d("Connecting to %s", json["WIFI_SSID"].as<const char *>());
+  WiFi.begin(json["WIFI_SSID"].as<const char *>(), json["WIFI_PASS"].as<const char *>());
   while (WiFi.status() != WL_CONNECTED)
   {
-    Serial.print(".");
-    delay(500);
+    delay(100);
   }
-  Serial.println();
-  Serial.print("ESP32-CAM IP Address: ");
-  Serial.println(WiFi.localIP());
+  log_d("ESP32-CAM IP Address: %d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -112,8 +92,8 @@ void setup()
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-
   // init with high specs to pre-allocate larger buffers
+  log_d("psramfound : %s\npsram_size : %lu\n", (psramFound()) ? "true" : "false", ESP.getPsramSize());
   if (psramFound())
   {
     config.frame_size = FRAMESIZE_SVGA;
@@ -131,7 +111,7 @@ void setup()
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK)
   {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    log_d("Camera init failed with error 0x%x", err);
     delay(1000);
     ESP.restart();
   }
@@ -140,10 +120,10 @@ void setup()
 void loop()
 {
   unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= timerInterval)
+  if (currentMillis - lastHTTPRequest >= HTTP_REQUEST_INTERVAL)
   {
     sendPhoto();
-    previousMillis = currentMillis;
+    lastHTTPRequest = currentMillis;
   }
 }
 
@@ -156,27 +136,24 @@ String sendPhoto()
   fb = esp_camera_fb_get();
   if (!fb)
   {
-    Serial.println("Camera capture failed");
-    delay(1000);
-    ESP.restart();
+    log_d("Camera capture failed");
+    return "Failed";
   }
 
-  Serial.println("Connecting to server: " + serverName);
-
-  if (client.connect(serverName.c_str(), serverPort))
+  if (client.connect(baseUri, serverPort))
   {
-    Serial.println("Connection successful!");
-    String head = "--RandomNerdTutorials\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    String tail = "\r\n--RandomNerdTutorials--\r\n";
+    log_d("Connection successful!");
+    String head = "--Otoma\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"" +json["DEVICE_TOKEN"].as<String>()+".jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+    String tail = "\r\n--Otoma--\r\n";
 
     uint32_t imageLen = fb->len;
     uint32_t extraLen = head.length() + tail.length();
     uint32_t totalLen = imageLen + extraLen;
 
-    client.println("POST " + serverPath + " HTTP/1.1");
-    client.println("Host: " + serverName);
+    client.printf("POST %s HTTP/1.1\r\n", requestURL);
+    client.printf("Host: %s\r\n", baseUri);
     client.println("Content-Length: " + String(totalLen));
-    client.println("Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
+    client.println("Content-Type: multipart/form-data; boundary=Otoma");
     client.println();
     client.print(head);
 
@@ -199,14 +176,12 @@ String sendPhoto()
 
     esp_camera_fb_return(fb);
 
-    int timoutTimer = 10000;
     long startTimer = millis();
     boolean state = false;
 
-    while ((startTimer + timoutTimer) > millis())
+    while ((startTimer + HTTP_REQUEST_TIMEOUT) > millis())
     {
-      Serial.print(".");
-      delay(100);
+      delay(10);
       while (client.available())
       {
         char c = client.read();
@@ -233,55 +208,62 @@ String sendPhoto()
         break;
       }
     }
-    Serial.println();
     client.stop();
-    Serial.println(getBody);
+    log_d("%s", getBody.c_str());
   }
   else
   {
-    getBody = "Connection to " + serverName + " failed.";
-    Serial.println(getBody);
+    getBody = "Failed";
+    log_d("Connection to %s failed.", baseUri);
   }
   return getBody;
 }
+
+bool writeConfig()
+{
+  File configFile = SPIFFS.open("/config.json", FILE_WRITE);
+  if (!configFile)
+  {
+    log_d("Failed to open config file");
+    return false;
+  }
+  serializeJson(json, configFile);
+  configFile.close();
+  return true;
+}
+
 bool loadConfig()
 {
   File configFile = SPIFFS.open("/config.json", "r");
   if (!configFile)
   {
-    Serial.println("Failed to open config file");
+    log_d("Failed to open config file");
     return false;
   }
-
   size_t size = configFile.size();
   if (size > 1024)
   {
-    Serial.println("Config file size is too large");
+    log_d("Config file size is too large");
     return false;
   }
-  std::unique_ptr<char[]> buf(new char[size]);
-  configFile.readBytes(buf.get(), size);
-  configFile.close();
-  Serial.printf("config.json content : %s \n\n", buf.get());
-  StaticJsonDocument<1024> json;
   size_t len = measureJson(json);
-  Serial.printf("JSON Size : %lu\n", len);
-  auto error = deserializeJson(json, buf.get());
+  log_d("JSON Size : %lu\n", len);
+  auto error = deserializeJson(json, configFile);
   if (error)
   {
-    Serial.print(F("deserializeJson() failed with code "));
-    Serial.println(error.c_str());
+    log_d("deserializeJson() failed with code %s", error.c_str());
     return false;
   }
-  Serial.printf("Hasil Baca config.json : \nIS_CONNECTED : %s\nWIFI_ERROR_FLAG1 : %s\nWIFI_ERROR_FLAG2 : %s\nWIFI_SSID : %s\nWIFI_PASS : %s\nAP_SSID : %s\nAP_PASS : %s\nUSERNAME : %s\nDEVICE_TOKEN : %s\n",
-                (json["IS_CONNECTED"].as<bool>()) ? "true" : "false",
-                (json["WIFI_ERROR_FLAG1"].as<bool>()) ? "true" : "false",
-                (json["WIFI_ERROR_FLAG2"].as<bool>()) ? "true" : "false",
-                json["WIFI_SSID"].as<const char *>(),
-                json["WIFI_PASS"].as<const char *>(),
-                json["AP_SSID"].as<const char *>(),
-                json["AP_PASS"].as<const char *>(),
-                json["USERNAME"].as<const char *>(),
-                json["DEVICE_TOKEN"].as<const char *>());
+  log_d("Hasil Baca config.json : \nIS_CONNECTED : %s\nWIFI_ERROR_FLAG1 : %s\nWIFI_ERROR_FLAG2 : %s\nWIFI_SSID : %s\nWIFI_PASS : %s\nAP_SSID : %s\nAP_PASS : %s\nUSERNAME : %s\nDEVICE_TOKEN : %s\n",
+        (json["IS_CONNECTED"].as<bool>()) ? "true" : "false",
+        (json["WIFI_ERROR_FLAG1"].as<bool>()) ? "true" : "false",
+        (json["WIFI_ERROR_FLAG2"].as<bool>()) ? "true" : "false",
+        json["WIFI_SSID"].as<const char *>(),
+        json["WIFI_PASS"].as<const char *>(),
+        json["AP_SSID"].as<const char *>(),
+        json["AP_PASS"].as<const char *>(),
+        json["USERNAME"].as<const char *>(),
+        json["DEVICE_TOKEN"].as<const char *>());
+  configFile.close();
   return true;
 }

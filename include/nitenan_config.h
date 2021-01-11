@@ -1,4 +1,16 @@
 #define BUILD_VERSION "1.0.0"
+
+#define UPDATE_CHECK_INTERVAL 86400000 // ONE DAY
+#define HTTP_REQUEST_INTERVAL 2000
+#define HTTP_REQUEST_TIMEOUT 10000
+#define MAXIMUM_DISCONNECT_TIME 900000 // Maximum WiFi disconnection time or server request time out before rollback to AP Mode and reset FB
+
+static const char baseUri[] = "192.168.2.130";
+static const char espUpdaterPath[] = "/otoma/api/ESPUpdater.php";
+static const char requestURL[] = "/otoma/api/nitenanControllerRequest.php";
+static const char identifyURL[] = "/otoma/api/identifyDevice.php";
+static const int serverPort = 8080;
+
 // CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
