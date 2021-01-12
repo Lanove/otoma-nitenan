@@ -3,6 +3,7 @@
         "array": "cpp",
         "initializer_list": "cpp",
         "utility": "cpp",
-        "*.tcc": "cpp"
+        "*.tcc": "cpp",
+        "string": "cpp"
     }
 }
