@@ -11,29 +11,33 @@ isi config.json
 */
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
-#include <nitenan_config.h>
 #include <Arduino.h>
 #include <WiFi.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_camera.h"
+#include <ArduinoJson.h>
+#include "FS.h"
+#include "SPIFFS.h"
+#include <nitenan_config.h>
 
+DynamicJsonDocument json(2048);
 const char *ssid = "aefocs";
 const char *password = "000354453000";
 
-String serverName = "192.168.2.130";
+String serverName = "192.168.2.119";
 
 String serverPath = "/otoma/api/nitenanControllerRequest.php"; // The default serverPath should be upload.php
 
-const int serverPort = 8080;
-
 WiFiClient client;
-
+const int serverPort = 8080;
 const int timerInterval = 1000;   // time between each HTTP POST image
 unsigned long previousMillis = 0; // last time image was sent
-
-String sendPhoto();
+// config.json API
 bool loadConfig();
+bool writeConfig();
+const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize);
+String sendPhoto();
 // const String
 // buildVer = BUILD_VERSION,
 //  sdkVer = ESP.getSdkVersion(),
@@ -142,7 +146,9 @@ void loop()
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= timerInterval)
   {
+    Serial.println("Sending photo");
     sendPhoto();
+    Serial.println("Done sending photo");
     previousMillis = currentMillis;
   }
 }
@@ -160,82 +166,15 @@ String sendPhoto()
     delay(1000);
     ESP.restart();
   }
-
   Serial.println("Connecting to server: " + serverName);
 
   if (client.connect(serverName.c_str(), serverPort))
   {
-    Serial.println("Connection successful!");
-    String head = "--RandomNerdTutorials\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    String tail = "\r\n--RandomNerdTutorials--\r\n";
-
-    uint32_t imageLen = fb->len;
-    uint32_t extraLen = head.length() + tail.length();
-    uint32_t totalLen = imageLen + extraLen;
-
-    client.println("POST " + serverPath + " HTTP/1.1");
-    client.println("Host: " + serverName);
-    client.println("Content-Length: " + String(totalLen));
-    client.println("Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
-    client.println();
-    client.print(head);
-
-    uint8_t *fbBuf = fb->buf;
-    size_t fbLen = fb->len;
-    for (size_t n = 0; n < fbLen; n = n + 1024)
-    {
-      if (n + 1024 < fbLen)
-      {
-        client.write(fbBuf, 1024);
-        fbBuf += 1024;
-      }
-      else if (fbLen % 1024 > 0)
-      {
-        size_t remainder = fbLen % 1024;
-        client.write(fbBuf, remainder);
-      }
-    }
-    client.print(tail);
-
+    Serial.println("Connected to server");
+    String head = "--AAA\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+    Serial.println(sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len));
     esp_camera_fb_return(fb);
-
-    int timoutTimer = 10000;
-    long startTimer = millis();
-    boolean state = false;
-
-    while ((startTimer + timoutTimer) > millis())
-    {
-      Serial.print(".");
-      delay(100);
-      while (client.available())
-      {
-        char c = client.read();
-        if (c == '\n')
-        {
-          if (getAll.length() == 0)
-          {
-            state = true;
-          }
-          getAll = "";
-        }
-        else if (c != '\r')
-        {
-          getAll += String(c);
-        }
-        if (state == true)
-        {
-          getBody += String(c);
-        }
-        startTimer = millis();
-      }
-      if (getBody.length() > 0)
-      {
-        break;
-      }
-    }
-    Serial.println();
     client.stop();
-    Serial.println(getBody);
   }
   else
   {
@@ -244,44 +183,161 @@ String sendPhoto()
   }
   return getBody;
 }
+
+bool writeConfig()
+{
+  File configFile = SPIFFS.open("/config.json", FILE_WRITE);
+  if (!configFile)
+  {
+    log_d("Failed to open config file");
+    return false;
+  }
+  serializeJson(json, configFile);
+  configFile.close();
+  return true;
+}
+
 bool loadConfig()
 {
   File configFile = SPIFFS.open("/config.json", "r");
   if (!configFile)
   {
-    Serial.println("Failed to open config file");
+    log_d("Failed to open config file");
     return false;
   }
-
   size_t size = configFile.size();
   if (size > 1024)
   {
-    Serial.println("Config file size is too large");
+    log_d("Config file size is too large");
     return false;
   }
-  std::unique_ptr<char[]> buf(new char[size]);
-  configFile.readBytes(buf.get(), size);
-  configFile.close();
-  Serial.printf("config.json content : %s \n\n", buf.get());
-  StaticJsonDocument<1024> json;
   size_t len = measureJson(json);
-  Serial.printf("JSON Size : %lu\n", len);
-  auto error = deserializeJson(json, buf.get());
+  log_d("JSON Size : %lu\n", len);
+  auto error = deserializeJson(json, configFile);
   if (error)
   {
-    Serial.print(F("deserializeJson() failed with code "));
-    Serial.println(error.c_str());
+    log_d("deserializeJson() failed with code %s", error.c_str());
     return false;
   }
-  Serial.printf("Hasil Baca config.json : \nIS_CONNECTED : %s\nWIFI_ERROR_FLAG1 : %s\nWIFI_ERROR_FLAG2 : %s\nWIFI_SSID : %s\nWIFI_PASS : %s\nAP_SSID : %s\nAP_PASS : %s\nUSERNAME : %s\nDEVICE_TOKEN : %s\n",
-                (json["IS_CONNECTED"].as<bool>()) ? "true" : "false",
-                (json["WIFI_ERROR_FLAG1"].as<bool>()) ? "true" : "false",
-                (json["WIFI_ERROR_FLAG2"].as<bool>()) ? "true" : "false",
-                json["WIFI_SSID"].as<const char *>(),
-                json["WIFI_PASS"].as<const char *>(),
-                json["AP_SSID"].as<const char *>(),
-                json["AP_PASS"].as<const char *>(),
-                json["USERNAME"].as<const char *>(),
-                json["DEVICE_TOKEN"].as<const char *>());
+  log_d("Hasil Baca config.json : \nIS_CONNECTED : %s\nWIFI_ERROR_FLAG1 : %s\nWIFI_ERROR_FLAG2 : %s\nWIFI_SSID : %s\nWIFI_PASS : %s\nAP_SSID : %s\nAP_PASS : %s\nUSERNAME : %s\nUSERPASS : %s\nDEVICE_TOKEN : %s\nAP_IP_ADDRESS : %d.%d.%d.%d",
+        (json["IS_CONNECTED"].as<bool>()) ? "true" : "false",
+        (json["WIFI_ERROR_FLAG1"].as<bool>()) ? "true" : "false",
+        (json["WIFI_ERROR_FLAG2"].as<bool>()) ? "true" : "false",
+        json["WIFI_SSID"].as<const char *>(),
+        json["WIFI_PASS"].as<const char *>(),
+        json["AP_SSID"].as<const char *>(),
+        json["AP_PASS"].as<const char *>(),
+        json["USERNAME"].as<const char *>(),
+        json["USERPASS"].as<const char *>(),
+        json["DEVICE_TOKEN"].as<const char *>(),
+        json["AP_IP_ADDRESS"][0].as<int>(),
+        json["AP_IP_ADDRESS"][1].as<int>(),
+        json["AP_IP_ADDRESS"][2].as<int>(),
+        json["AP_IP_ADDRESS"][3].as<int>());
+  configFile.close();
   return true;
+}
+
+const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize)
+{
+  const char *tail = "\r\n--AAA--\r\n";
+  const uint32_t requestLen = payloadSize + strlen(requestHead) + strlen(tail);
+  String getBody;
+  String getAll;
+  long startTimer = millis();
+  boolean state = false;
+  log_d("Sending headers...");
+  client.printf("POST %s HTTP/1.1\r\n", requestUri);
+  log_d("Sending headers 1");
+  client.printf("Host: %s\r\n", baseUri);
+  log_d("Sending headers 2");
+  client.printf("HTTP_DEVICE_TOKEN: %s\r\n", json["DEVICE_TOKEN"].as<const char *>());
+  log_d("Sending headers 3");
+  client.printf("HTTP_ESP32_BUILD_VERSION: %s\r\n", BUILD_VERSION);
+  log_d("Sending headers 4");
+  client.printf("HTTP_ESP32_SDK_VERSION: %s\r\n", ESP.getSdkVersion());
+  log_d("Sending headers 5");
+  client.printf("HTTP_ESP32_CHIP_VERSION: %lu\r\n", ESP.getChipRevision());
+  log_d("Sending headers 6");
+  client.printf("HTTP_ESP32_FREE_SKETCH: %lu\r\n", ESP.getFreeSketchSpace());
+  log_d("Sending headers 7");
+  client.printf("HTTP_ESP32_SKETCH_SIZE: %lu\r\n", ESP.getSketchSize());
+  log_d("Sending headers 8");
+  client.printf("HTTP_ESP32_FLASH_SIZE: %lu\r\n", ESP.getFlashChipSize());
+  log_d("Sending headers 9");
+  client.printf("HTTP_ESP32_SKETCH_MD5: %s\r\n", ESP.getSketchMD5().c_str());
+  log_d("Sending headers 10");
+  client.printf("HTTP_ESP32_CPU_FREQ: %lu\r\n", ESP.getCpuFreqMHz());
+  log_d("Sending headers 11");
+  client.printf("HTTP_ESP32_MAC: %s\r\n", WiFi.macAddress().c_str());
+  log_d("Sending headers 12");
+  client.printf("HTTP_ESP32_USERNAME: %s\r\n", json["USERNAME"].as<const char *>());
+  log_d("Sending headers 13");
+  client.printf("HTTP_ESP32_WIFI_SSID: %s\r\n", json["WIFI_SSID"].as<const char *>());
+  log_d("Sending headers 14");
+  client.printf("HTTP_ESP32_AP_SSID: %s\r\n", json["AP_SSID"].as<const char *>());
+  log_d("Sending headers 15");
+  client.printf("HTTP_ESP32_AP_PASS: %s\r\n", json["AP_PASS"].as<const char *>());
+  log_d("Sending headers 16");
+  client.printf("HTTP_ESP32_AP_IP: %d.%d.%d.%d\r\n", json["AP_IP_ADDRESS"][0].as<int>(), json["AP_IP_ADDRESS"][1].as<int>(), json["AP_IP_ADDRESS"][2].as<int>(), json["AP_IP_ADDRESS"][3].as<int>());
+  log_d("Sending headers 17");
+  client.printf("Content-Length: %lu\r\n", requestLen);
+  log_d("Sending headers 18");
+  client.printf("Content-Type: %s\r\n", contentType);
+  log_d("Sending headers 19");
+  client.println();
+  log_d("Sending headers 20");
+  client.printf("%s", requestHead);
+  Serial.println("Sending headers completed");
+
+  Serial.println("Sending payload...");
+  uint8_t *p = payload;
+  for (size_t n = 0; n < payloadSize; n = n + 1024)
+  {
+    if (n + 1024 < payloadSize)
+    {
+      client.write(p, 1024);
+      p += 1024;
+    }
+    else if (payloadSize % 1024 > 0)
+    {
+      size_t remainder = payloadSize % 1024;
+      client.write(p, remainder);
+    }
+  }
+  client.printf("%s", tail);
+  Serial.println("Sending payload completed");
+
+  Serial.println("Receive payload from server...");
+  while ((startTimer + HTTP_REQUEST_TIMEOUT) > millis())
+  {
+    delay(10);
+    while (client.available())
+    {
+      char c = client.read();
+      if (c == '\n')
+      {
+        if (getAll.length() == 0)
+        {
+          state = true;
+        }
+        getAll = "";
+      }
+      else if (c != '\r')
+      {
+        getAll += String(c);
+      }
+      if (state == true)
+      {
+        getBody += String(c);
+      }
+      startTimer = millis();
+    }
+    if (getBody.length() > 0)
+    {
+      break;
+    }
+  }
+  Serial.println("Receive payload from server completed");
+  return getBody.c_str();
 }
