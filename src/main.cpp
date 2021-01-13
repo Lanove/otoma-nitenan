@@ -34,8 +34,13 @@ void initializeCamera();
 bool loadConfig();
 bool writeConfig();
 
-// WiFi API
-const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize);
+// WiFi API and variables
+bool disconnectFlag;
+unsigned long disconnectStamp;
+bool httpReuse;
+
+void sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize, String &httpResponse);
+void handleHeaderResponse(bool &isReusable, int &returnCode, int &size);
 void initializeWiFi();
 bool initiateSoftAP();
 bool initiateClient(const char *ssid, const char *pass);
@@ -45,7 +50,9 @@ void deployWebServer();
 void closeServer();
 bool isWifiConnected();
 
-// Web server API
+// Web server API and variables
+bool serverAvailable; // Variable to store esp's web server status, true when web server is
+String responseStatus = "empty";
 void pgRoot();
 void pgAccInfo();
 void pgReqStatus();
@@ -54,6 +61,7 @@ void pgRestart();
 
 void setup()
 {
+  Serial.begin(115200);
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   log_d("buildVer : %s\nsdkVer : %s\nchipRev : %lu\nfreeSketch : %lu\nsketchSize : %lu\nflashChipSize : %lu\nsketchMD5 : %s\ncpuFreq : %luMHz\nmacAddr : %s\n", BUILD_VERSION, ESP.getSdkVersion(), ESP.getChipRevision(), ESP.getFreeSketchSpace(), ESP.getSketchSize(), ESP.getFlashChipSize(), ESP.getSketchMD5().c_str(), ESP.getCpuFreqMHz(), WiFi.macAddress().c_str());
   log_d("Mounting FS...");
@@ -78,27 +86,27 @@ void setup()
   initializeWiFi();
 }
 
-bool disconnectFlag;
-unsigned long disconnectStamp;
 void loop()
 {
-  const unsigned long currentMillis = millis();
   if (serverAvailable)
   {
     server.handleClient(); // Listen for HTTP requests from clients
   }
   else
   {
-    if (isWifiConnected()) // If WiFi is connected
+    if (isWifiConnected()) // If WiFi is connected then do sendPhoto() every defined intervals second
     {
-      if (currentMillis - lastHTTPRequest >= HTTP_REQUEST_INTERVAL)
+      if (millis() - lastHTTPRequest >= HTTP_REQUEST_INTERVAL)
       {
+        lastHTTPRequest = millis();
         const String responsePayload = sendPhoto();
         log_d("Response : %s", responsePayload.c_str());
-        lastHTTPRequest = currentMillis;
-        if(responsePayload != "Failed"){
-        }else{
-          if (!disconnectFlag)
+        if (responsePayload != "Failed")
+        {
+        }
+        else
+        {
+          if (!disconnectFlag) // If HTTP POST is not giving any response and disconnectFlag is on reset condition, we set disconnectFlag and record current time
           {
             disconnectFlag = true;
             disconnectStamp = millis();
@@ -108,17 +116,19 @@ void loop()
     }
     else
     {
-      if (!disconnectFlag)
+      if (!disconnectFlag) // If WiFi is not connected and disconnectFlag is on reset condition, we set disconnectFlag and record current time
       {
         disconnectFlag = true;
         disconnectStamp = millis();
       }
     }
   }
-  if (disconnectFlag && millis() - disconnectStamp >= MAXIMUM_DISCONNECT_TIME)
+  if (disconnectFlag && millis() - disconnectStamp >= MAXIMUM_DISCONNECT_TIME) // If time has passed MAXIMUM_DISCONNECT_TIME after disconnectFlag was set
   {
+    // We assume that WiFi is not connected to internet, so we reset WiFi credentials and IS_CONNECTED flag and then reboot
     json["WIFI_SSID"] = "KONEKSI TERPUTUS";
     json["WIFI_PASS"] = "";
+    json["IS_CONNECTED"] = false;
     writeConfig();
     delay(500);
     ESP.restart();
@@ -142,12 +152,13 @@ String sendPhoto()
   {
     log_d("Connected to server");
     String head = "--AAA\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    response = sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len);
+    sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len, response);
     log_d("%s", response.c_str());
     esp_camera_fb_return(fb);
     client.stop();
   }
-  else{
+  else
+  {
     log_d("Connection to %s failed.", baseUri);
     response = "Failed";
   }
@@ -205,7 +216,7 @@ bool writeConfig()
   }
   serializeJson(json, configFile);
   configFile.close();
-  return true;
+  return loadConfig();
 }
 
 bool loadConfig()
@@ -251,34 +262,35 @@ bool loadConfig()
 /////////////////////////////////////////////////
 
 /////////////////////// WIFI API /////////////////////////////
-bool serverAvailable; // Variable to store esp's web server status, true when web server is online
-const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize)
+void sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize, String &httpResponse)
 {
   const char *tail = "\r\n--AAA--\r\n";
   const uint32_t requestLen = payloadSize + strlen(requestHead) + strlen(tail);
   String getBody;
   String getAll;
-  long startTimer = millis();
   boolean state = false;
   client.printf("POST %s HTTP/1.1\r\n", requestUri);
   client.printf("Host: %s\r\n", baseUri);
-  client.printf("HTTP_DEVICE_TOKEN: %s\r\n", json["DEVICE_TOKEN"].as<const char *>());
-  client.printf("HTTP_ESP32_BUILD_VERSION: %s\r\n", BUILD_VERSION);
-  client.printf("HTTP_ESP32_SDK_VERSION: %s\r\n", ESP.getSdkVersion());
-  client.printf("HTTP_ESP32_CHIP_VERSION: %lu\r\n", ESP.getChipRevision());
-  client.printf("HTTP_ESP32_FREE_SKETCH: %lu\r\n", ESP.getFreeSketchSpace());
-  client.printf("HTTP_ESP32_SKETCH_SIZE: %lu\r\n", ESP.getSketchSize());
-  client.printf("HTTP_ESP32_FLASH_SIZE: %lu\r\n", ESP.getFlashChipSize());
-  client.printf("HTTP_ESP32_SKETCH_MD5: %s\r\n", ESP.getSketchMD5().c_str());
-  client.printf("HTTP_ESP32_CPU_FREQ: %lu\r\n", ESP.getCpuFreqMHz());
-  client.printf("HTTP_ESP32_MAC: %s\r\n", WiFi.macAddress().c_str());
-  client.printf("HTTP_ESP32_USERNAME: %s\r\n", json["USERNAME"].as<const char *>());
-  client.printf("HTTP_ESP32_WIFI_SSID: %s\r\n", json["WIFI_SSID"].as<const char *>());
-  client.printf("HTTP_ESP32_AP_SSID: %s\r\n", json["AP_SSID"].as<const char *>());
-  client.printf("HTTP_ESP32_AP_PASS: %s\r\n", json["AP_PASS"].as<const char *>());
-  client.printf("HTTP_ESP32_AP_IP: %d.%d.%d.%d\r\n", json["AP_IP_ADDRESS"][0].as<int>(), json["AP_IP_ADDRESS"][1].as<int>(), json["AP_IP_ADDRESS"][2].as<int>(), json["AP_IP_ADDRESS"][3].as<int>());
+  client.printf("ESP32-BUILD-VERSION: %s\r\n", BUILD_VERSION);
+  client.printf("ESP32-SDK-VERSION: %s\r\n", ESP.getSdkVersion());
+  client.printf("ESP32-CHIP-VERSION: %lu\r\n", ESP.getChipRevision());
+  client.printf("ESP32-FREE-SKETCH: %lu\r\n", ESP.getFreeSketchSpace());
+  client.printf("ESP32-SKETCH-SIZE: %lu\r\n", ESP.getSketchSize());
+  client.printf("ESP32-FLASH-SIZE: %lu\r\n", ESP.getFlashChipSize());
+  client.printf("ESP32-SKETCH-MD5: %s\r\n", ESP.getSketchMD5().c_str());
+  client.printf("ESP32-CPU-FREQ: %lu\r\n", ESP.getCpuFreqMHz());
+  client.printf("ESP32-MAC: %s\r\n", WiFi.macAddress().c_str());
+  client.printf("ESP32-USERNAME: %s\r\n", json["USERNAME"].as<const char *>());
+  client.printf("ESP32-WIFI-SSID: %s\r\n", json["WIFI_SSID"].as<const char *>());
+  client.printf("ESP32-AP-SSID: %s\r\n", json["AP_SSID"].as<const char *>());
+  client.printf("ESP32-AP-PASS: %s\r\n", json["AP_PASS"].as<const char *>());
+  client.printf("ESP32-AP-IP: %d.%d.%d.%d\r\n", json["AP_IP_ADDRESS"][0].as<int>(), json["AP_IP_ADDRESS"][1].as<int>(), json["AP_IP_ADDRESS"][2].as<int>(), json["AP_IP_ADDRESS"][3].as<int>());
+  client.printf("DEVICE-TOKEN: %s\r\n", json["DEVICE_TOKEN"].as<const char *>());
   client.printf("Content-Length: %lu\r\n", requestLen);
   client.printf("Content-Type: %s\r\n", contentType);
+  client.printf("User-Agent: ESP32HTTPClient\r\n");
+  client.printf("Connection: %s\r\n", (httpReuse) ? "keep-alive" : "close");
+  client.printf("Accept-Encoding: identity;q=1,chunked;q=0.1,*;q=0\r\n");
   client.println();
   client.printf("%s", requestHead);
 
@@ -297,36 +309,120 @@ const char *sendPOST(const char *requestHead, const char *contentType, const cha
     }
   }
   client.printf("%s", tail);
-  while ((startTimer + HTTP_REQUEST_TIMEOUT) > millis())
+  bool isReusable;
+  int returnCode = 200, size = 0;
+  handleHeaderResponse(isReusable, returnCode, size);
+  log_d("isReusable : %s\nreturnCode : %d\nsize : %d", (isReusable) ? "true" : "false", returnCode, size);
+  if (returnCode != -1 && returnCode == 200)
   {
-    delay(10);
-    while (client.available())
+    if (size > 0)
     {
-      char c = client.read();
-      if (c == '\n')
+      char *str = (char *)malloc(size + 1);
+      int bufCounter = 0;
+      while (bufCounter < size)
       {
-        if (getAll.length() == 0)
-        {
-          state = true;
-        }
-        getAll = "";
+        char c = client.read();
+        str[bufCounter++] = c;
       }
-      else if (c != '\r')
-      {
-        getAll += String(c);
-      }
-      if (state == true)
-      {
-        getBody += String(c);
-      }
-      startTimer = millis();
+      str[size] = '\0';
+      httpResponse = String(str);
+      free(str);
+      log_d("%s", httpResponse.c_str());
     }
-    if (getBody.length() > 0)
+    else
     {
-      break;
+      while (client.connected() || client.available())
+      {
+        if (client.available())
+        {
+          httpResponse = client.readStringUntil('\n');
+          log_d("%s", httpResponse.c_str());
+        }
+      }
     }
   }
-  return getBody.c_str();
+}
+
+void handleHeaderResponse(bool &isReusable, int &returnCode, int &size)
+{
+  unsigned long lastDataTime = millis();
+  String transferEncoding;
+  while (client.connected() || client.available())
+  {
+    if (client.available())
+    {
+      String headerLine = client.readStringUntil('\n');
+      headerLine.trim(); // remove \r
+
+      lastDataTime = millis();
+
+      log_v("RX: '%s'", headerLine.c_str());
+
+      if (headerLine.startsWith("HTTP/1."))
+      {
+        log_d("%s", (headerLine[sizeof "HTTP/1." - 1] != '0') ? "reusable" : "non-reusable");
+        returnCode = headerLine.substring(9, headerLine.indexOf(' ', 9)).toInt();
+      }
+      else if (headerLine.indexOf(':'))
+      {
+        String headerName = headerLine.substring(0, headerLine.indexOf(':'));
+        String headerValue = headerLine.substring(headerLine.indexOf(':') + 1);
+        headerValue.trim();
+
+        if (headerName.equalsIgnoreCase("Content-Length"))
+          size = headerValue.toInt();
+
+        if (headerName.equalsIgnoreCase("Connection"))
+        {
+          if (headerValue.indexOf("close") >= 0 && headerValue.indexOf("keep-alive") < 0)
+          {
+            log_d("non-reusable");
+            isReusable = false;
+          }
+          else
+          {
+            log_d("reusable");
+            isReusable = true;
+          }
+        }
+        if (headerName.equalsIgnoreCase("Transfer-Encoding"))
+        {
+          transferEncoding = headerValue;
+        }
+      }
+
+      if (headerLine == "")
+      {
+        log_d("code: %d", returnCode);
+
+        if (size > 0)
+        {
+          log_d("size: %d", size);
+        }
+
+        if (returnCode)
+        {
+          return;
+        }
+        else
+        {
+          log_d("Remote host is not an HTTP Server!");
+          returnCode = -2;
+          return;
+        }
+      }
+    }
+    else
+    {
+      if ((millis() - lastDataTime) > HTTP_REQUEST_TIMEOUT)
+      {
+        log_d("HTTP response timeout!");
+        returnCode = -1;
+        return;
+      }
+      delay(10);
+    }
+  }
 }
 
 void initializeWiFi()
@@ -501,8 +597,6 @@ void closeServer()
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////// WEB SERVER REQUEST HANDLER API ////////////////////////////////////////
-String responseStatus = "empty";
-
 void pgRoot() // Root HTML document callback
 {
   server.send(200, "text/html", FPSTR(htmlDoc));
@@ -518,7 +612,6 @@ void pgRestart() // Request is called when user press restart button from web
 void pgAccInfo() // Request is called when user press submit button from web
 {
   bool writeConfigFlag = false;
-  bool failFetch = true;
   String usrn = server.arg(F("usrn"));
   String unpw = server.arg(F("unpw"));
   String ssid = server.arg(F("ssid"));
@@ -538,9 +631,16 @@ void pgAccInfo() // Request is called when user press submit button from web
   if (initiateClient(ssid.c_str(), wfpw.c_str()))
   {
     // This WiFi seems legit, let's save to config.json
-    json["WIFI_SSID"] = ssid.c_str();
-    json["WIFI_PASS"] = ssid.c_str();
-    writeConfigFlag = true;
+    if (json["WIFI_SSID"].as<String>() != ssid)
+    {
+      json["WIFI_SSID"] = ssid.c_str();
+      writeConfigFlag = true;
+    }
+    if (json["WIFI_PASS"].as<String>() != wfpw)
+    {
+      json["WIFI_PASS"] = wfpw.c_str();
+      writeConfigFlag = true;
+    }
     if (client.connect(baseUri, serverPort)) // Try to connect to web
     {
       log_d("Connected to server, begin post request");
@@ -555,14 +655,24 @@ void pgAccInfo() // Request is called when user press submit button from web
       log_d("JSON Size : %d", doc.memoryUsage());
       log_d("Transferred JSON : %s", jsonString.c_str());
       String head = "--AAA\r\nContent-Disposition: form-data; name=\"requestJSON\"; filename=\"request.json\"\r\nContent-Type: application/json\r\n\r\n";
-      const String response = String(sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", identifyURL, (uint8_t *)jsonString.c_str(), jsonString.length()));
-      log_d("Response : %s", response.c_str());
-      if (response == "success" || response == "recon")
+      sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", identifyURL, (uint8_t *)jsonString.c_str(), jsonString.length(), responseStatus);
+      if (responseStatus == "success" || responseStatus == "recon")
       {
-        json["USERNAME"] = usrn;
-        json["USERPASS"] = unpw;
-        json["IS_CONNECTED"] = true;
-        writeConfigFlag = true;
+        if (json["USERNAME"].as<String>() != usrn)
+        {
+          json["USERNAME"] = usrn.c_str();
+          writeConfigFlag = true;
+        }
+        if (json["USERPASS"].as<String>() != unpw)
+        {
+          json["USERPASS"] = unpw.c_str();
+          writeConfigFlag = true;
+        }
+        if (json["IS_CONNECTED"].as<bool>() != true)
+        {
+          json["IS_CONNECTED"] = true;
+          writeConfigFlag = true;
+        }
         delay(10);
       }
       client.stop();
@@ -574,7 +684,10 @@ void pgAccInfo() // Request is called when user press submit button from web
     responseStatus = "invwifi";
   // Reinitiate softAP and re deploy the web server to 192.168.4.1
   if (writeConfigFlag)
-    writeConfig();
+  {
+    if (!writeConfig())
+      log_d("Failed writing to config.json!");
+  }
   delay(100);
   closeClient();
   closeServer();

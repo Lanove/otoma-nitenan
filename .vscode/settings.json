@@ -4,6 +4,7 @@
         "initializer_list": "cpp",
         "utility": "cpp",
         "*.tcc": "cpp",
-        "string": "cpp"
+        "string": "cpp",
+        "functional": "cpp"
     }
 }
