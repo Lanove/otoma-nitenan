@@ -1,13 +1,13 @@
 {
-  "WIFI_SSID": "aefocs",
-  "WIFI_PASS": "000354453000",
-  "AP_SSID": "Otoma-Nitenan",
-  "AP_PASS": "lpkojihu",
-  "USERNAME": "",
-  "USERPASS": "",
-  "DEVICE_TOKEN": "4rPN0sNk69",
-  "AP_IP_ADDRESS": [192, 168, 4, 1],
-  "IS_CONNECTED": false,
-  "WIFI_ERROR_FLAG1": false,
-  "WIFI_ERROR_FLAG2": false
-}
+    "WIFI_SSID": "aefocs",
+    "WIFI_PASS": "000354453000",
+    "AP_SSID": "Otoma-Nitenan",
+    "AP_PASS": "lpkojihu",
+    "USERNAME": "",
+    "USERPASS": "",
+    "DEVICE_TOKEN": "4rPN0sNk69",
+    "AP_IP_ADDRESS": [192, 168, 4, 1],
+    "IS_CONNECTED": false,
+    "WIFI_ERROR_FLAG1": false,
+    "WIFI_ERROR_FLAG2": false
+  }

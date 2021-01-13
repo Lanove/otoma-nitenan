@@ -36,7 +36,7 @@ bool loadConfig();
 bool writeConfig();
 
 // WiFi API
-void sendClientHeader(const char *requestHead, uint32_t requestLen, const char *requestUri);
+const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize);
 void initializeWiFi();
 bool initiateSoftAP();
 bool initiateClient(const char *ssid, const char *pass);
@@ -52,6 +52,7 @@ void pgAccInfo();
 void pgReqStatus();
 void handleNotFound();
 void pgRestart();
+
 
 void setup()
 {
@@ -97,42 +98,18 @@ void sendPhoto()
   if (!fb)
   {
     log_d("Camera capture failed");
-    return "Failed";
+    return;
   }
+  Serial.println("Connecting to server: " + serverName);
 
-  if (client.connect(baseUri, serverPort))
+  if (client.connect(serverName.c_str(), serverPort))
   {
-    log_d("Connection successful!");
-    String head = "--Otoma\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"" + json["DEVICE_TOKEN"].as<String>() + ".jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    String tail = "\r\n--Otoma--\r\n";
-    uint32_t imageLen = fb->len;
-    uint32_t extraLen = head.length() + tail.length();
-    uint32_t totalLen = imageLen + extraLen;
-    sendClientHeader(head.c_str(),"multipart/form-data; boundary=Otoma", totalLen, requestURL);
-
-    uint8_t *fbBuf = fb->buf;
-    size_t fbLen = fb->len;
-    for (size_t n = 0; n < fbLen; n = n + 1024)
-    {
-      if (n + 1024 < fbLen)
-      {
-        client.write(fbBuf, 1024);
-        fbBuf += 1024;
-      }
-      else if (fbLen % 1024 > 0)
-      {
-        size_t remainder = fbLen % 1024;
-        client.write(fbBuf, remainder);
-      }
-    }
-    client.print(tail);
-
+    Serial.println("Connected to server");
+    String head = "--AAA\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+    Serial.println(sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len));
     esp_camera_fb_return(fb);
-
-    log_d("%s", getHTTPResponse());
     client.stop();
-  }
-  else
+  }else
     log_d("Connection to %s failed.", baseUri);
 }
 
@@ -234,18 +211,23 @@ bool loadConfig()
 
 /////////////////////// WIFI API /////////////////////////////
 bool serverAvailable; // Variable to store esp's web server status, true when web server is online
-
-void sendClientHeader(const char *requestHead,const char *contentType, uint32_t requestLen, const char *requestUri)
+const char *sendPOST(const char *requestHead, const char *contentType, const char *requestUri, uint8_t *payload, size_t payloadSize)
 {
+  const char *tail = "\r\n--AAA--\r\n";
+  const uint32_t requestLen = payloadSize + strlen(requestHead) + strlen(tail);
+  String getBody;
+  String getAll;
+  long startTimer = millis();
+  boolean state = false;
   client.printf("POST %s HTTP/1.1\r\n", requestUri);
   client.printf("Host: %s\r\n", baseUri);
   client.printf("HTTP_DEVICE_TOKEN: %s\r\n", json["DEVICE_TOKEN"].as<const char *>());
   client.printf("HTTP_ESP32_BUILD_VERSION: %s\r\n", BUILD_VERSION);
   client.printf("HTTP_ESP32_SDK_VERSION: %s\r\n", ESP.getSdkVersion());
-  client.printf("HTTP_ESP32_CHIP_VERSION: %s\r\n", ESP.getChipRevision());
-  client.printf("HTTP_ESP32_FREE_SKETCH: %s\r\n", ESP.getFreeSketchSpace());
-  client.printf("HTTP_ESP32_SKETCH_SIZE: %s\r\n", ESP.getSketchSize());
-  client.printf("HTTP_ESP32_FLASH_SIZE: %s\r\n", ESP.getFlashChipSize());
+  client.printf("HTTP_ESP32_CHIP_VERSION: %lu\r\n", ESP.getChipRevision());
+  client.printf("HTTP_ESP32_FREE_SKETCH: %lu\r\n", ESP.getFreeSketchSpace());
+  client.printf("HTTP_ESP32_SKETCH_SIZE: %lu\r\n", ESP.getSketchSize());
+  client.printf("HTTP_ESP32_FLASH_SIZE: %lu\r\n", ESP.getFlashChipSize());
   client.printf("HTTP_ESP32_SKETCH_MD5: %s\r\n", ESP.getSketchMD5().c_str());
   client.printf("HTTP_ESP32_CPU_FREQ: %lu\r\n", ESP.getCpuFreqMHz());
   client.printf("HTTP_ESP32_MAC: %s\r\n", WiFi.macAddress().c_str());
@@ -258,14 +240,22 @@ void sendClientHeader(const char *requestHead,const char *contentType, uint32_t 
   client.printf("Content-Type: %s\r\n", contentType);
   client.println();
   client.printf("%s", requestHead);
-}
 
-const char *getHTTPResponse()
-{
-  String getBody;
-  String getAll;
-  long startTimer = millis();
-  boolean state = false;
+  uint8_t *p = payload;
+  for (size_t n = 0; n < payloadSize; n = n + 1024)
+  {
+    if (n + 1024 < payloadSize)
+    {
+      client.write(p, 1024);
+      p += 1024;
+    }
+    else if (payloadSize % 1024 > 0)
+    {
+      size_t remainder = payloadSize % 1024;
+      client.write(p, remainder);
+    }
+  }
+  client.printf("%s", tail);
   while ((startTimer + HTTP_REQUEST_TIMEOUT) > millis())
   {
     delay(10);
@@ -297,7 +287,6 @@ const char *getHTTPResponse()
   }
   return getBody.c_str();
 }
-
 void initializeWiFi()
 {
   closeClient();
