@@ -246,51 +246,28 @@ const char *sendPOST(const char *requestHead, const char *contentType, const cha
   String getAll;
   long startTimer = millis();
   boolean state = false;
-  log_d("Sending headers...");
   client.printf("POST %s HTTP/1.1\r\n", requestUri);
-  log_d("Sending headers 1");
   client.printf("Host: %s\r\n", baseUri);
-  log_d("Sending headers 2");
   client.printf("HTTP_DEVICE_TOKEN: %s\r\n", json["DEVICE_TOKEN"].as<const char *>());
-  log_d("Sending headers 3");
   client.printf("HTTP_ESP32_BUILD_VERSION: %s\r\n", BUILD_VERSION);
-  log_d("Sending headers 4");
   client.printf("HTTP_ESP32_SDK_VERSION: %s\r\n", ESP.getSdkVersion());
-  log_d("Sending headers 5");
   client.printf("HTTP_ESP32_CHIP_VERSION: %lu\r\n", ESP.getChipRevision());
-  log_d("Sending headers 6");
   client.printf("HTTP_ESP32_FREE_SKETCH: %lu\r\n", ESP.getFreeSketchSpace());
-  log_d("Sending headers 7");
   client.printf("HTTP_ESP32_SKETCH_SIZE: %lu\r\n", ESP.getSketchSize());
-  log_d("Sending headers 8");
   client.printf("HTTP_ESP32_FLASH_SIZE: %lu\r\n", ESP.getFlashChipSize());
-  log_d("Sending headers 9");
   client.printf("HTTP_ESP32_SKETCH_MD5: %s\r\n", ESP.getSketchMD5().c_str());
-  log_d("Sending headers 10");
   client.printf("HTTP_ESP32_CPU_FREQ: %lu\r\n", ESP.getCpuFreqMHz());
-  log_d("Sending headers 11");
   client.printf("HTTP_ESP32_MAC: %s\r\n", WiFi.macAddress().c_str());
-  log_d("Sending headers 12");
   client.printf("HTTP_ESP32_USERNAME: %s\r\n", json["USERNAME"].as<const char *>());
-  log_d("Sending headers 13");
   client.printf("HTTP_ESP32_WIFI_SSID: %s\r\n", json["WIFI_SSID"].as<const char *>());
-  log_d("Sending headers 14");
   client.printf("HTTP_ESP32_AP_SSID: %s\r\n", json["AP_SSID"].as<const char *>());
-  log_d("Sending headers 15");
   client.printf("HTTP_ESP32_AP_PASS: %s\r\n", json["AP_PASS"].as<const char *>());
-  log_d("Sending headers 16");
   client.printf("HTTP_ESP32_AP_IP: %d.%d.%d.%d\r\n", json["AP_IP_ADDRESS"][0].as<int>(), json["AP_IP_ADDRESS"][1].as<int>(), json["AP_IP_ADDRESS"][2].as<int>(), json["AP_IP_ADDRESS"][3].as<int>());
-  log_d("Sending headers 17");
   client.printf("Content-Length: %lu\r\n", requestLen);
-  log_d("Sending headers 18");
   client.printf("Content-Type: %s\r\n", contentType);
-  log_d("Sending headers 19");
   client.println();
-  log_d("Sending headers 20");
   client.printf("%s", requestHead);
-  Serial.println("Sending headers completed");
 
-  Serial.println("Sending payload...");
   uint8_t *p = payload;
   for (size_t n = 0; n < payloadSize; n = n + 1024)
   {
@@ -306,9 +283,6 @@ const char *sendPOST(const char *requestHead, const char *contentType, const cha
     }
   }
   client.printf("%s", tail);
-  Serial.println("Sending payload completed");
-
-  Serial.println("Receive payload from server...");
   while ((startTimer + HTTP_REQUEST_TIMEOUT) > millis())
   {
     delay(10);
@@ -338,6 +312,5 @@ const char *sendPOST(const char *requestHead, const char *contentType, const cha
       break;
     }
   }
-  Serial.println("Receive payload from server completed");
   return getBody.c_str();
 }
