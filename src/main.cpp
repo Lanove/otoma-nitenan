@@ -10,7 +10,6 @@ isi config.json
 }
 */
 #include <ArduinoJson.h>
-#include <StreamUtils.h>
 #include "FS.h"
 #include "SPIFFS.h"
 #include <nitenan_config.h>
@@ -28,7 +27,7 @@ WebServer server(80);
 unsigned long lastHTTPRequest = 0;
 
 // Camera API
-void sendPhoto();
+String sendPhoto(); // This function sends image and receive response from server about flashlight,servo,etc
 void initializeCamera();
 
 // config.json API
@@ -52,7 +51,6 @@ void pgAccInfo();
 void pgReqStatus();
 void handleNotFound();
 void pgRestart();
-
 
 void setup()
 {
@@ -80,37 +78,80 @@ void setup()
   initializeWiFi();
 }
 
+bool disconnectFlag;
+unsigned long disconnectStamp;
 void loop()
 {
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastHTTPRequest >= HTTP_REQUEST_INTERVAL)
+  const unsigned long currentMillis = millis();
+  if (serverAvailable)
   {
-    sendPhoto();
-    lastHTTPRequest = currentMillis;
+    server.handleClient(); // Listen for HTTP requests from clients
+  }
+  else
+  {
+    if (isWifiConnected()) // If WiFi is connected
+    {
+      if (currentMillis - lastHTTPRequest >= HTTP_REQUEST_INTERVAL)
+      {
+        const String responsePayload = sendPhoto();
+        log_d("Response : %s", responsePayload.c_str());
+        lastHTTPRequest = currentMillis;
+        if(responsePayload != "Failed"){
+        }else{
+          if (!disconnectFlag)
+          {
+            disconnectFlag = true;
+            disconnectStamp = millis();
+          }
+        }
+      }
+    }
+    else
+    {
+      if (!disconnectFlag)
+      {
+        disconnectFlag = true;
+        disconnectStamp = millis();
+      }
+    }
+  }
+  if (disconnectFlag && millis() - disconnectStamp >= MAXIMUM_DISCONNECT_TIME)
+  {
+    json["WIFI_SSID"] = "KONEKSI TERPUTUS";
+    json["WIFI_PASS"] = "";
+    writeConfig();
+    delay(500);
+    ESP.restart();
   }
 }
 
 /////////////////// Camera API ///////////////////////////
-void sendPhoto()
+String sendPhoto()
 {
+  String response;
   camera_fb_t *fb = NULL;
   fb = esp_camera_fb_get();
   if (!fb)
   {
     log_d("Camera capture failed");
-    return;
+    return "Failed";
   }
-  Serial.println("Connecting to server: " + serverName);
+  log_d("Connecting to server: %s", baseUri);
 
-  if (client.connect(serverName.c_str(), serverPort))
+  if (client.connect(baseUri, serverPort))
   {
-    Serial.println("Connected to server");
+    log_d("Connected to server");
     String head = "--AAA\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    Serial.println(sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len));
+    response = sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len);
+    log_d("%s", response.c_str());
     esp_camera_fb_return(fb);
     client.stop();
-  }else
+  }
+  else{
     log_d("Connection to %s failed.", baseUri);
+    response = "Failed";
+  }
+  return response;
 }
 
 void initializeCamera()
@@ -287,6 +328,7 @@ const char *sendPOST(const char *requestHead, const char *contentType, const cha
   }
   return getBody.c_str();
 }
+
 void initializeWiFi()
 {
   closeClient();
@@ -358,64 +400,6 @@ void initializeWiFi()
     }
   }
 }
-
-/*
-void fetchURL(const String &URL, const String &data, int &responseCode, String &response)
-{
-  unsigned long dt = millis();
-
-  client->setX509Time(timeClient.getEpochTime());
-  // client.setInsecure();
-  // client.setCiphersLessSecure();
-  if (!client->connect(baseUri, 443))
-  {
-    Serial.printf("Connecting takes %lums\n", millis() - dt);
-    Serial.println("connection failed");
-    responseCode = 408;
-    response = "";
-    failedRequestCount++;
-  }
-  else
-  {
-    Serial.printf("Connecting takes %lums\n", millis() - dt);
-    // configure traged server and url
-    http.begin(dynamic_cast<WiFiClient &>(*client), URL); //HTTP
-    http.addHeader(F("Content-Type"), F("application/json"));
-    http.addHeader(F("Device-Token"), storedDeviceToken);
-    http.addHeader(F("ESP8266-BUILD-VERSION"), F(BUILD_VERSION));
-    http.addHeader(F("ESP8266-SDK-VERSION"), String(ESP.getSdkVersion()));
-    http.addHeader(F("ESP8266-CORE-VERSION"), ESP.getCoreVersion());
-    http.addHeader(F("ESP8266-MAC"), WiFi.macAddress());
-    http.addHeader(F("ESP8266-SKETCH-MD5"), sketchMD5);
-    http.addHeader(F("ESP8266-SKETCH-FREE-SPACE"), freeSketch);
-    http.addHeader(F("ESP8266-SKETCH-SIZE"), sketchSize);
-    http.addHeader(F("ESP8266-CHIP-SIZE"), chipSize);
-    dt = millis();
-    // start connection and send HTTP header and body
-    int httpCode = http.POST(data);
-    Serial.printf("POST HTTP Takes %lums\n", millis() - dt);
-    dt = millis();
-    responseCode = httpCode;
-    // httpCode will be negative on error
-    if (httpCode > 0)
-    {
-      // HTTP header has been send and Server response header has been handled
-      // file found at server
-      if (httpCode == HTTP_CODE_OK)
-      {
-        successRequestCount++;
-        response = http.getString();
-      }
-    }
-    else
-    {
-      failedRequestCount++;
-      Serial.printf("[HTTP] POST... failed, error: %s\n", http.errorToString(httpCode).c_str());
-    }
-    http.end();
-  }
-}
-*/
 
 bool isWifiConnected()
 {
@@ -533,6 +517,8 @@ void pgRestart() // Request is called when user press restart button from web
 
 void pgAccInfo() // Request is called when user press submit button from web
 {
+  bool writeConfigFlag = false;
+  bool failFetch = true;
   String usrn = server.arg(F("usrn"));
   String unpw = server.arg(F("unpw"));
   String ssid = server.arg(F("ssid"));
@@ -547,62 +533,48 @@ void pgAccInfo() // Request is called when user press submit button from web
   if (wfpw.length() > 64)
     wfpw = "overlength";
 
-  Serial.printf("Username : %s\nPassword : %s\nSSID : %s\nWiFiPW : %s\n", usrn.c_str(), unpw.c_str(), ssid.c_str(), wfpw.c_str());
+  log_d("Username : %s\nPassword : %s\nSSID : %s\nWiFiPW : %s\n", usrn.c_str(), unpw.c_str(), ssid.c_str(), wfpw.c_str());
 
   if (initiateClient(ssid.c_str(), wfpw.c_str()))
   {
     // This WiFi seems legit, let's save to config.json
     json["WIFI_SSID"] = ssid.c_str();
     json["WIFI_PASS"] = ssid.c_str();
-    writeConfig();
-
-    // Initiate HTTP Request to identifyDevice.php
-    Serial.print("[HTTP] begin...\n");
-    int httpCode;
-    StaticJsonDocument<360> doc;
-    String jsonString;
-    doc[F("username")] = usrn.c_str();
-    doc[F("password")] = unpw.c_str();
-    doc[F("softssid")] = json["AP_SSID"].as<const char *>();
-    doc[F("softpswd")] = json["AP_PASS"].as<const char *>();
-    serializeJson(doc, jsonString);
-    Serial.printf("JSON Size : %d\n", doc.memoryUsage());
-    Serial.printf("Transferred JSON : %s\n", jsonString.c_str());
-    Serial.printf("Code : %d\nResponse : %s\n", httpCode, responseStatus.c_str());
-    if (httpCode == HTTP_CODE_OK)
-    { // Success fetched!, store the message to responseStatus!
-      if (responseStatus == "success" || responseStatus == "recon")
+    writeConfigFlag = true;
+    if (client.connect(baseUri, serverPort)) // Try to connect to web
+    {
+      log_d("Connected to server, begin post request");
+      // Initiate HTTP Request to identifyDevice.php
+      StaticJsonDocument<360> doc;
+      String jsonString;
+      doc[F("username")] = usrn.c_str();
+      doc[F("password")] = unpw.c_str();
+      doc[F("softssid")] = json["AP_SSID"].as<const char *>();
+      doc[F("softpswd")] = json["AP_PASS"].as<const char *>();
+      serializeJson(doc, jsonString);
+      log_d("JSON Size : %d", doc.memoryUsage());
+      log_d("Transferred JSON : %s", jsonString.c_str());
+      String head = "--AAA\r\nContent-Disposition: form-data; name=\"requestJSON\"; filename=\"request.json\"\r\nContent-Type: application/json\r\n\r\n";
+      const String response = String(sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", identifyURL, (uint8_t *)jsonString.c_str(), jsonString.length()));
+      log_d("Response : %s", response.c_str());
+      if (response == "success" || response == "recon")
       {
-        writeToEEPROM(USERNAME, usrn);
-        writeToEEPROM(USERPASS, unpw);
-        bitWrite(storedFirstByte, FB_CONNECTED, true);
-        eeprom.writeByte(ADDR_FIRST_BYTE, storedFirstByte);
+        json["USERNAME"] = usrn;
+        json["USERPASS"] = unpw;
+        json["IS_CONNECTED"] = true;
+        writeConfigFlag = true;
         delay(10);
       }
+      client.stop();
     }
-    else
-    { // It seems that first request is failed, let's wait for 1s and try again for the second time
-      delay(3000);
-      fetchURL(FPSTR(identifyURL), json, httpCode, responseStatus);
-      if (httpCode == HTTP_CODE_OK)
-      { // Success fetched!, store the message to responseStatus!
-
-        if (responseStatus == "success" || responseStatus == "recon")
-        {
-          writeToEEPROM(USERNAME, usrn);
-          bitWrite(storedFirstByte, FB_CONNECTED, true);
-          eeprom.writeByte(ADDR_FIRST_BYTE, storedFirstByte);
-          delay(10);
-        }
-      }
-      else // It failed once again, probably the WiFi is offline or server is offline, let's report
-        responseStatus = "nocon";
-    }
+    else // Unable to connect to web, probably it's a wifi with no internet
+      responseStatus = "nocon";
   }
   else // Cannot connect to WiFi, report invalid SSID or Password!
     responseStatus = "invwifi";
   // Reinitiate softAP and re deploy the web server to 192.168.4.1
-
+  if (writeConfigFlag)
+    writeConfig();
   delay(100);
   closeClient();
   closeServer();
