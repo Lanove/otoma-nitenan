@@ -108,7 +108,7 @@ void sendPhoto()
     uint32_t imageLen = fb->len;
     uint32_t extraLen = head.length() + tail.length();
     uint32_t totalLen = imageLen + extraLen;
-    sendClientHeader(head.c_str(), totalLen, requestURL);
+    sendClientHeader(head.c_str(),"multipart/form-data; boundary=Otoma", totalLen, requestURL);
 
     uint8_t *fbBuf = fb->buf;
     size_t fbLen = fb->len;
@@ -235,7 +235,7 @@ bool loadConfig()
 /////////////////////// WIFI API /////////////////////////////
 bool serverAvailable; // Variable to store esp's web server status, true when web server is online
 
-void sendClientHeader(const char *requestHead, uint32_t requestLen, const char *requestUri)
+void sendClientHeader(const char *requestHead,const char *contentType, uint32_t requestLen, const char *requestUri)
 {
   client.printf("POST %s HTTP/1.1\r\n", requestUri);
   client.printf("Host: %s\r\n", baseUri);
@@ -255,7 +255,7 @@ void sendClientHeader(const char *requestHead, uint32_t requestLen, const char *
   client.printf("HTTP_ESP32_AP_PASS: %s\r\n", json["AP_PASS"].as<const char *>());
   client.printf("HTTP_ESP32_AP_IP: %d.%d.%d.%d\r\n", json["AP_IP_ADDRESS"][0].as<int>(), json["AP_IP_ADDRESS"][1].as<int>(), json["AP_IP_ADDRESS"][2].as<int>(), json["AP_IP_ADDRESS"][3].as<int>());
   client.printf("Content-Length: %lu\r\n", requestLen);
-  client.println("Content-Type: multipart/form-data; boundary=Otoma");
+  client.printf("Content-Type: %s\r\n", contentType);
   client.println();
   client.printf("%s", requestHead);
 }
