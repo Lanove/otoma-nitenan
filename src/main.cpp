@@ -19,10 +19,25 @@ isi config.json
 #include "soc/rtc_cntl_reg.h"
 #include "esp_camera.h"
 #include <WebServer.h>
+#include <Servo.h>
 
 DynamicJsonDocument json(2048);
 WiFiClient client;
 WebServer server(80);
+Servo myservo; // create servo object to control a servo
+
+int servoPos;
+const int servoChannel = 5;
+const int servoPin = 13;
+
+// the number of the LED pin
+const int ledPin = 4; // 16 corresponds to GPIO16
+
+// setting PWM properties
+const int freq = 490;
+const int ledChannel = 7;
+const int pwmResolution = 8;
+int lampBrightness;
 
 unsigned long lastHTTPRequest = 0;
 
@@ -58,10 +73,13 @@ void pgAccInfo();
 void pgReqStatus();
 void handleNotFound();
 void pgRestart();
+void setLamp(int newVal);
 
 void setup()
 {
   Serial.begin(115200);
+  myservo.attach(servoPin, servoChannel); // attaches the servo on pin 13 to the servo object
+  // configure LED PWM functionalitites
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   log_d("buildVer : %s\nsdkVer : %s\nchipRev : %lu\nfreeSketch : %lu\nsketchSize : %lu\nflashChipSize : %lu\nsketchMD5 : %s\ncpuFreq : %luMHz\nmacAddr : %s\n", BUILD_VERSION, ESP.getSdkVersion(), ESP.getChipRevision(), ESP.getFreeSketchSpace(), ESP.getSketchSize(), ESP.getFlashChipSize(), ESP.getSketchMD5().c_str(), ESP.getCpuFreqMHz(), WiFi.macAddress().c_str());
   log_d("Mounting FS...");
@@ -84,6 +102,10 @@ void setup()
 
   initializeCamera();
   initializeWiFi();
+  ledcSetup(ledChannel, freq, pwmResolution);
+  setLamp(0);
+  // attach the channel to the GPIO to be controlled
+  ledcAttachPin(ledPin, ledChannel);
 }
 
 void loop()
@@ -100,9 +122,25 @@ void loop()
       {
         lastHTTPRequest = millis();
         const String responsePayload = sendPhoto();
-        log_d("Response : %s", responsePayload.c_str());
+
         if (responsePayload != "Failed")
         {
+          disconnectFlag = false;
+          DynamicJsonDocument out(2048);
+          deserializeJson(out, responsePayload);
+          log_d("servo: %d\nflash: %d", out["servo"].as<int>(), out["flash"].as<int>());
+          out["flash"] = constrain(out["flash"].as<int>(), 0, 100);
+          out["servo"] = constrain(out["servo"].as<int>(), 0, 180);
+          if (servoPos != out["servo"])
+          {
+            servoPos = out["servo"];
+            myservo.write(servoPos);
+          }
+          if (lampBrightness != out["flash"])
+          {
+            lampBrightness = out["flash"];
+            setLamp(lampBrightness);
+          }
         }
         else
         {
@@ -135,7 +173,15 @@ void loop()
   }
 }
 
+// Lamp Control
+void setLamp(int newVal)
+{
+  // Apply a logarithmic function to the scale.
+  int brightness = round((pow(2, (1 + (newVal * 0.02))) - 2) / 6 * (pow(2, pwmResolution) - 1));
+  ledcWrite(ledChannel, (newVal != 0) ? brightness : 0);
+}
 /////////////////// Camera API ///////////////////////////
+int cameraFailCounter;
 String sendPhoto()
 {
   String response;
@@ -144,8 +190,12 @@ String sendPhoto()
   if (!fb)
   {
     log_d("Camera capture failed");
+    cameraFailCounter++;
+    if(cameraFailCounter > 5)
+      ESP.restart();
     return "Failed";
   }
+  cameraFailCounter = 0;
   log_d("Connecting to server: %s", baseUri);
 
   if (client.connect(baseUri, serverPort))
@@ -153,7 +203,6 @@ String sendPhoto()
     log_d("Connected to server");
     String head = "--AAA\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
     sendPOST(head.c_str(), "multipart/form-data; boundary=AAA", requestURL, fb->buf, fb->len, response);
-    log_d("%s", response.c_str());
     esp_camera_fb_return(fb);
     client.stop();
   }
