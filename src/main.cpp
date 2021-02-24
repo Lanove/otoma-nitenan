@@ -106,6 +106,7 @@ void setup()
   setLamp(0);
   // attach the channel to the GPIO to be controlled
   ledcAttachPin(ledPin, ledChannel);
+  httpReuse = true;
 }
 
 void loop()
