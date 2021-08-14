@@ -1,13 +1,13 @@
 {
-    "WIFI_SSID": "aefocs",
-    "WIFI_PASS": "000354453000",
+    "WIFI_SSID": "SH-04H_AP",
+    "WIFI_PASS": "lpkojihu",
     "AP_SSID": "Otoma-Nitenan",
     "AP_PASS": "lpkojihu",
     "USERNAME": "userid907",
     "USERPASS": "ayzir907",
     "DEVICE_TOKEN": "4rPN0sNk69",
     "AP_IP_ADDRESS": [192, 168, 4, 1],
-    "IS_CONNECTED": false,
+    "IS_CONNECTED": true,
     "WIFI_ERROR_FLAG1": false,
     "WIFI_ERROR_FLAG2": false
   }

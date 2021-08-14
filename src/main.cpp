@@ -1,12 +1,17 @@
 /*
 isi config.json
 {
-  "WIFI_SSID":"aefocs",
-  "WIFI_PASS":"000354453000",
-  "AP_SSID":"Otoma-Nitenan",
-  "AP_PASS":"lpkojihu",
-  "USERNAME": "gold",
-  "DEVICETOKEN": "4rPN0sNk69"
+    "WIFI_SSID": "Global_Net",
+    "WIFI_PASS": "000354453000",
+    "AP_SSID": "Otoma-Nitenan",
+    "AP_PASS": "lpkojihu",
+    "USERNAME": "userid907",
+    "USERPASS": "ayzir907",
+    "DEVICE_TOKEN": "4rPN0sNk69",
+    "AP_IP_ADDRESS": [192, 168, 4, 1],
+    "IS_CONNECTED": false,
+    "WIFI_ERROR_FLAG1": false,
+    "WIFI_ERROR_FLAG2": false
 }
 */
 #include <ArduinoJson.h>
@@ -319,6 +324,7 @@ void sendPOST(const char *requestHead, const char *contentType, const char *requ
   String getBody;
   String getAll;
   boolean state = false;
+  log_d("Send header");
   client.printf("POST %s HTTP/1.1\r\n", requestUri);
   client.printf("Host: %s\r\n", baseUri);
   client.printf("ESP32-BUILD-VERSION: %s\r\n", BUILD_VERSION);
@@ -343,10 +349,15 @@ void sendPOST(const char *requestHead, const char *contentType, const char *requ
   client.printf("Accept-Encoding: identity;q=1,chunked;q=0.1,*;q=0\r\n");
   client.println();
   client.printf("%s", requestHead);
-
+  log_d("Send payload");
+  unsigned long payloadStart = millis();
   uint8_t *p = payload;
   for (size_t n = 0; n < payloadSize; n = n + 1024)
   {
+    if(millis() - payloadStart >= HTTP_PAYLOAD_SEND_TIMEOUT){
+      Serial.println("Payload send timeout!");
+      break;
+    }
     if (n + 1024 < payloadSize)
     {
       client.write(p, 1024);
@@ -358,6 +369,7 @@ void sendPOST(const char *requestHead, const char *contentType, const char *requ
       client.write(p, remainder);
     }
   }
+  log_d("Payload done");
   client.printf("%s", tail);
   bool isReusable;
   int returnCode = 200, size = 0;
